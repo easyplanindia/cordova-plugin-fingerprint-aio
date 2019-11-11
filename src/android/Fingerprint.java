@@ -92,6 +92,8 @@ public class Fingerprint extends CordovaPlugin {
      */
     private static boolean mDisableBackup = false;
 
+    private static JSONObject mArgObject = null;
+
     /**
      * Constructor.
      */
@@ -168,6 +170,7 @@ public class Fingerprint extends CordovaPlugin {
         }
 
         final JSONObject arg_object = args.getJSONObject(0);
+        mArgObject = arg_object;
 
         if (action.equals("authenticate")) {
             if (!arg_object.has("clientId") || !arg_object.has("clientSecret")) {
@@ -178,7 +181,7 @@ public class Fingerprint extends CordovaPlugin {
             }
             mClientId = arg_object.getString("clientId");
             mClientSecret = arg_object.getString("clientSecret");
-            if (!mClientSecret) {
+            if (mClientSecret == null) {
                 mClientSecret = arg_object.getString("encryptedSecret");
             }
             if (arg_object.has("disableBackup")) {
@@ -213,7 +216,7 @@ public class Fingerprint extends CordovaPlugin {
                             bundle.putBoolean("disableBackup", mDisableBackup);
                             mFragment.setArguments(bundle);
 
-                            if (initCipher(arg_object)) {
+                            if (initCipher()) {
                                 mFragment.setCancelable(false);
                                 // Show the fingerprint dialog. The user has the option to use the fingerprint with
                                 // crypto, or you can fall back to using a server-side verified password.
@@ -287,9 +290,9 @@ public class Fingerprint extends CordovaPlugin {
      * been disabled or reset after the key was generated, or if a fingerprint got enrolled after
      * the key was generated.
      */
-    private static boolean initCipher(JSONObject arg_object) {
+    private static boolean initCipher() {
         int cipher_mode = Cipher.ENCRYPT_MODE;
-        if (arg_object.getString("encryptedSecret")) {
+        if (mArgObject.getString("encryptedSecret")) {
             cipher_mode = Cipher.DECRYPT_MODE;
         }
 
@@ -402,7 +405,7 @@ public class Fingerprint extends CordovaPlugin {
                 resultJson.put("withPassword", true);
 
                 // if failed to init cipher because of InvalidKeyException, create new key
-                if (!initCipher()) {
+                if (!initCipher(mArgObject)) {
                     createKey();
                 }
             }
