@@ -50,6 +50,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
 import java.security.UnrecoverableKeyException;
 import java.security.cert.CertificateException;
+import java.security.spec.InvalidParameterSpecException;
 import java.util.Locale;
 
 import javax.crypto.BadPaddingException;
@@ -58,11 +59,12 @@ import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.KeyGenerator;
 import javax.crypto.NoSuchPaddingException;
 import javax.crypto.SecretKey;
+import javax.crypto.spec.IvParameterSpec;
 
 @TargetApi(23)
 public class Fingerprint extends CordovaPlugin {
 
-    public static final String TAG = "Fingerprint";
+    public static final String TAG = "FingerprintCordova";
     public static String packageName;
 
     private static final String DIALOG_FRAGMENT_TAG = "FpAuthDialog";
@@ -173,15 +175,16 @@ public class Fingerprint extends CordovaPlugin {
         mArgObject = arg_object;
 
         if (action.equals("authenticate")) {
-            if (!arg_object.has("clientId") || !arg_object.has("clientSecret")) {
+            if (!arg_object.has("clientId") || (!arg_object.has("clientSecret") && !arg_object.has("encryptedSecret"))) {
                 mPluginResult = new PluginResult(PluginResult.Status.ERROR);
                 mCallbackContext.error(errorResponse.put("message", "Missing required parameters"));
                 mCallbackContext.sendPluginResult(mPluginResult);
                 return true;
             }
             mClientId = arg_object.getString("clientId");
-            mClientSecret = arg_object.getString("clientSecret");
-            if (mClientSecret == null) {
+            if (arg_object.has("clientSecret")) {
+                mClientSecret = arg_object.getString("clientSecret");
+            } else {
                 mClientSecret = arg_object.getString("encryptedSecret");
             }
             if (arg_object.has("disableBackup")) {
@@ -203,9 +206,11 @@ public class Fingerprint extends CordovaPlugin {
                         key = getSecretKey();
                     }
                 }
+                Log.e(TAG, "initiating fingerprint reading");
                 if (key != null && !initCipher()) {
                     isCipherInit = false;
                 }
+                Log.e(TAG, "initiated cipher");
                 if (key != null) {
                     cordova.getActivity().runOnUiThread(new Runnable() {
                         public void run() {
@@ -291,21 +296,26 @@ public class Fingerprint extends CordovaPlugin {
      * the key was generated.
      */
     private static boolean initCipher() {
-        int cipher_mode = Cipher.ENCRYPT_MODE;
-        if (mArgObject.getString("encryptedSecret")) {
-            cipher_mode = Cipher.DECRYPT_MODE;
-        }
-
         boolean initCipher = false;
         String errorMessage = "";
         String initCipherExceptionErrorPrefix = "Failed to init Cipher: ";
         try {
             SecretKey key = getSecretKey();
-            mCipher.init(cipher_mode, key);
+            if (mArgObject.has("encryptedSecret")) {
+                byte[] iv = Base64.decode(mArgObject.getString("ivParams"), 0);
+                IvParameterSpec ivParams = new IvParameterSpec(iv);
+                mCipher.init(Cipher.DECRYPT_MODE, key, ivParams);
+            } else {
+                mCipher.init(Cipher.ENCRYPT_MODE, key);
+            }
+
             initCipher = true;
         } catch (InvalidKeyException e) {
             errorMessage = initCipherExceptionErrorPrefix + "InvalidKeyException: " + e.toString();
-            
+        } catch (InvalidAlgorithmParameterException e) {
+            errorMessage = initCipherExceptionErrorPrefix + "InvalidAlgorithmParameterException: " + e.toString();
+        } catch (JSONException e) {
+            errorMessage = initCipherExceptionErrorPrefix + "JSONException: " + e.toString();
         }
         if (!initCipher) {
             Log.e(TAG, errorMessage);
@@ -398,14 +408,19 @@ public class Fingerprint extends CordovaPlugin {
             if (withFingerprint) {
                 // If the user has authenticated with fingerprint, verify that using cryptography and
                 // then return the encrypted token
-                byte[] encrypted = tryEncrypt();
-                resultJson.put("withFingerprint", Base64.encodeToString(encrypted, 0 /* flags */));
+                if (mArgObject.has("clientSecret")) {
+                    IvParameterSpec ivParams = mCipher.getParameters().getParameterSpec(IvParameterSpec.class);
+                    byte[] iv = ivParams.getIV();
+                    resultJson.put("ivParams", Base64.encodeToString(iv, 0 /* flags */));
+                }
+                String encryptedString = tryEncrypt();
+                resultJson.put("withFingerprint", encryptedString);
             } else {
                 // Authentication happened with backup password.
                 resultJson.put("withPassword", true);
 
                 // if failed to init cipher because of InvalidKeyException, create new key
-                if (!initCipher(mArgObject)) {
+                if (!initCipher()) {
                     createKey();
                 }
             }
@@ -417,6 +432,10 @@ public class Fingerprint extends CordovaPlugin {
         } catch (IllegalBlockSizeException e) {
             errorMessage = "Failed to encrypt the data with the generated key: " +
                     "IllegalBlockSizeException: " + e.getMessage();
+            Log.e(TAG, errorMessage);
+        } catch (InvalidParameterSpecException e) {
+            errorMessage = "Failed to get parameter spec for decryption: " +
+                    "InvalidParameterSpecException: " + e.getMessage();
             Log.e(TAG, errorMessage);
         } catch (JSONException e) {
             errorMessage = "Failed to set resultJson key value pair: " + e.getMessage();
@@ -449,8 +468,18 @@ public class Fingerprint extends CordovaPlugin {
      * Tries to encrypt some data with the generated key in {@link #createKey} which is
      * only works if the user has just authenticated via fingerprint.
      */
-    private static byte[] tryEncrypt() throws BadPaddingException, IllegalBlockSizeException {
-        return mCipher.doFinal(mClientSecret.getBytes());
+    private static String tryEncrypt() throws BadPaddingException, IllegalBlockSizeException {
+        byte[] encrypted;
+        byte[] finalBytes;
+        if (mArgObject.has("encryptedSecret")) {
+            encrypted = Base64.decode(mClientSecret, 0);
+            finalBytes = mCipher.doFinal(encrypted);
+            return new String(finalBytes);
+        } else {
+            encrypted = mClientSecret.getBytes();
+            finalBytes = mCipher.doFinal(encrypted);
+            return Base64.encodeToString(finalBytes, 0 /* flags */);
+        }
     }
 
     private static boolean setPluginResultError(String errorMessage) {
