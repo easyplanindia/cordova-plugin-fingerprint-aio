@@ -178,6 +178,9 @@ public class Fingerprint extends CordovaPlugin {
             }
             mClientId = arg_object.getString("clientId");
             mClientSecret = arg_object.getString("clientSecret");
+            if (!mClientSecret) {
+                mClientSecret = arg_object.getString("encryptedSecret");
+            }
             if (arg_object.has("disableBackup")) {
                 mDisableBackup = arg_object.getBoolean("disableBackup");
             }
@@ -210,7 +213,7 @@ public class Fingerprint extends CordovaPlugin {
                             bundle.putBoolean("disableBackup", mDisableBackup);
                             mFragment.setArguments(bundle);
 
-                            if (initCipher()) {
+                            if (initCipher(arg_object)) {
                                 mFragment.setCancelable(false);
                                 // Show the fingerprint dialog. The user has the option to use the fingerprint with
                                 // crypto, or you can fall back to using a server-side verified password.
@@ -284,13 +287,18 @@ public class Fingerprint extends CordovaPlugin {
      * been disabled or reset after the key was generated, or if a fingerprint got enrolled after
      * the key was generated.
      */
-    private static boolean initCipher() {
+    private static boolean initCipher(JSONObject arg_object) {
+        int cipher_mode = Cipher.ENCRYPT_MODE;
+        if (arg_object.getString("encryptedSecret")) {
+            cipher_mode = Cipher.DECRYPT_MODE;
+        }
+
         boolean initCipher = false;
         String errorMessage = "";
         String initCipherExceptionErrorPrefix = "Failed to init Cipher: ";
         try {
             SecretKey key = getSecretKey();
-            mCipher.init(Cipher.ENCRYPT_MODE, key);
+            mCipher.init(cipher_mode, key);
             initCipher = true;
         } catch (InvalidKeyException e) {
             errorMessage = initCipherExceptionErrorPrefix + "InvalidKeyException: " + e.toString();
